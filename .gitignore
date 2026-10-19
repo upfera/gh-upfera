@@ -9,3 +9,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Go build and test artifacts
+/gh-upfera
+/gh-upfera.exe
+/coverage.out
