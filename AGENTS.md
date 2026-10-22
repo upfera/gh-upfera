@@ -23,13 +23,10 @@ organization's [CONTRIBUTING.md](https://github.com/upfera/.github/blob/main/CON
 
 ## Project commands
 
-Fill in for this repository, or delete this section if the project has no build or tests:
-
-- Build: `TODO`
-- Test: `TODO`
-- Lint/format: `TODO`
-
-While a command is still `TODO`, ask instead of guessing it.
+- Build: `go build ./...`
+- Test: `go test ./...`
+- Lint: `go vet ./...`
+- Format: `gofmt -w *.go`
 
 ## More context
 
