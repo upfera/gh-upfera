@@ -72,8 +72,11 @@ func TestCreateRepositoryUsesTemplateAndAppliesSettings(t *testing.T) {
 	if created.HTMLURL != "https://github.com/upfera/new-repo" {
 		t.Fatalf("created URL = %q", created.HTMLURL)
 	}
-	if len(requests) != 12 {
-		t.Fatalf("number of requests = %d, want 12: %v", len(requests), requests)
+	if len(requests) != 13 {
+		t.Fatalf("number of requests = %d, want 13: %v", len(requests), requests)
+	}
+	if requests[2] != "GET /repos/upfera/new-repo/git/ref/heads/main" || requests[3] != requests[2] {
+		t.Fatalf("generated branch was not retried: %v", requests[:4])
 	}
 }
 
@@ -81,7 +84,15 @@ func newRepositoryCreationHandler(t *testing.T, requests *[]string, settingsAppl
 	mux := http.NewServeMux()
 	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo", repositorySettingsHandler(settingsApplied))
 	registerAPIRoute(t, mux, requests, "POST", "/repos/upfera/.template/generate", repositoryGenerationHandler(t))
-	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo/git/ref/heads/main", jsonHandler(http.StatusOK, map[string]any{"object": map[string]string{"sha": "template-root"}}))
+	refAttempts := 0
+	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo/git/ref/heads/main", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		refAttempts++
+		if refAttempts == 1 {
+			writeJSON(w, http.StatusConflict, apiError{Message: "Git Repository is empty."})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": map[string]string{"sha": "template-root"}})
+	}))
 	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo/git/commits/template-root", jsonHandler(http.StatusOK, map[string]any{"message": "Initial commit", "tree": map[string]string{"sha": "template-tree"}, "parents": []any{}}))
 	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo/git/commits/normalized-root", jsonHandler(http.StatusOK, map[string]any{"message": initialCommitMessage, "tree": map[string]string{"sha": "template-tree"}, "parents": []any{}, "verification": map[string]bool{"verified": true}}))
 	registerAPIRoute(t, mux, requests, "PATCH", "/repos/upfera/new-repo", repositoryUpdateHandler(t, settingsApplied))

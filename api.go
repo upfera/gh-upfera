@@ -15,12 +15,14 @@ import (
 )
 
 const (
-	githubReposPath      = "/repos/"
-	upferaOwner          = "upfera"
-	templateRepository   = "upfera/.template"
-	squashTitle          = "PR_TITLE"
-	squashMessage        = "PR_BODY"
-	initialCommitMessage = "chore: initial commit"
+	githubReposPath          = "/repos/"
+	upferaOwner              = "upfera"
+	templateRepository       = "upfera/.template"
+	squashTitle              = "PR_TITLE"
+	squashMessage            = "PR_BODY"
+	initialCommitMessage     = "chore: initial commit"
+	generatedRepoWaitTimeout = 30 * time.Second
+	generatedRepoInitialWait = 250 * time.Millisecond
 )
 
 type repository struct {
@@ -197,7 +199,8 @@ func (c *gitHubClient) ensureInitialCommit(ctx context.Context, repo repository)
 	}
 	branchPath := url.PathEscape(branch)
 	var ref gitRef
-	if err := c.request(ctx, http.MethodGet, githubReposPath+upferaOwner+"/"+url.PathEscape(repo.Name)+"/git/ref/heads/"+branchPath, nil, &ref); err != nil {
+	refPath := githubReposPath + upferaOwner + "/" + url.PathEscape(repo.Name) + "/git/ref/heads/" + branchPath
+	if err := c.waitForGeneratedBranch(ctx, refPath, &ref); err != nil {
 		return fmt.Errorf("read generated default branch: %w", err)
 	}
 
@@ -242,6 +245,37 @@ func (c *gitHubClient) ensureInitialCommit(ctx context.Context, repo repository)
 		return fmt.Errorf("remove temporary bootstrap branch: %w", err)
 	}
 	return nil
+}
+
+func (c *gitHubClient) waitForGeneratedBranch(ctx context.Context, path string, ref *gitRef) error {
+	waitCtx, cancel := context.WithTimeout(ctx, generatedRepoWaitTimeout)
+	defer cancel()
+
+	delay := generatedRepoInitialWait
+	for {
+		err := c.request(waitCtx, http.MethodGet, path, nil, ref)
+		if err == nil {
+			return nil
+		}
+		var apiErr *githubError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict || !strings.Contains(strings.ToLower(apiErr.Message), "repository is empty") {
+			return err
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("repository remained empty for %s: %w", generatedRepoWaitTimeout, err)
+		case <-timer.C:
+		}
+		if delay < 2*time.Second {
+			delay *= 2
+		}
+	}
 }
 
 func (c *gitHubClient) createRef(ctx context.Context, repo, branch, sha string) error {
