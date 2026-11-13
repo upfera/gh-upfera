@@ -52,7 +52,7 @@ func TestNewGitHubClientUsesGitHubCLIFallback(t *testing.T) {
 func TestCreateRepositoryUsesTemplateAndAppliesSettings(t *testing.T) {
 	var requests []string
 	settingsApplied := false
-	server := httptest.NewServer(newRepositoryCreationHandler(t, &requests, &settingsApplied))
+	server := httptest.NewServer(newRepositoryCreationHandler(t, &requests, &settingsApplied, http.StatusNotFound))
 	defer server.Close()
 
 	client := &gitHubClient{
@@ -80,9 +80,14 @@ func TestCreateRepositoryUsesTemplateAndAppliesSettings(t *testing.T) {
 	}
 }
 
-func newRepositoryCreationHandler(t *testing.T, requests *[]string, settingsApplied *bool) http.Handler {
+func newRepositoryCreationHandler(t *testing.T, requests *[]string, settingsApplied *bool, availabilityStatus int) http.Handler {
 	mux := http.NewServeMux()
-	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo", repositorySettingsHandler(settingsApplied))
+	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo", repositorySettingsHandler(settingsApplied, availabilityStatus))
+	// A redirect from a renamed repository points here; following it would look
+	// like an existing repository, so the availability check must not do that.
+	mux.HandleFunc("GET /repos/upfera/renamed-repo", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, repository{Name: "renamed-repo", HTMLURL: "https://github.com/upfera/renamed-repo"})
+	})
 	registerAPIRoute(t, mux, requests, "POST", "/repos/upfera/.template/generate", repositoryGenerationHandler(t))
 	refAttempts := 0
 	registerAPIRoute(t, mux, requests, "GET", "/repos/upfera/new-repo/git/ref/heads/main", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -111,10 +116,15 @@ func registerAPIRoute(t *testing.T, mux *http.ServeMux, requests *[]string, meth
 	}))
 }
 
-func repositorySettingsHandler(settingsApplied *bool) http.Handler {
+func repositorySettingsHandler(settingsApplied *bool, availabilityStatus int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !*settingsApplied {
-			writeJSON(w, http.StatusNotFound, apiError{Message: "Not Found"})
+			if availabilityStatus == http.StatusNotFound {
+				writeJSON(w, http.StatusNotFound, apiError{Message: "Not Found"})
+				return
+			}
+			w.Header().Set("Location", "/repos/upfera/renamed-repo")
+			w.WriteHeader(availabilityStatus)
 			return
 		}
 		writeJSON(w, http.StatusOK, repository{
@@ -325,6 +335,38 @@ func TestCreateRepositoryDetectsExistingRepository(t *testing.T) {
 	_, err := client.CreateRepository(context.Background(), createOptions{Name: "already-there", Visibility: "private"})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("CreateRepository() error = %v, want already exists", err)
+	}
+}
+
+func TestCreateRepositoryTreatsRenamedRepositoryRedirectAsAvailable(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var requests []string
+			settingsApplied := false
+			server := httptest.NewServer(newRepositoryCreationHandler(t, &requests, &settingsApplied, status))
+			defer server.Close()
+
+			client := &gitHubClient{
+				baseURL: server.URL,
+				token:   "test-token",
+				http:    server.Client(),
+				signedRootCreator: func(context.Context, string, string, string) (string, string, error) {
+					return "normalized-root", "initial-bootstrap", nil
+				},
+			}
+			created, err := client.CreateRepository(context.Background(), createOptions{
+				Name: "new-repo", Description: "Repository description", Visibility: "private",
+			})
+			if err != nil {
+				t.Fatalf("CreateRepository() error = %v", err)
+			}
+			if created.HTMLURL != "https://github.com/upfera/new-repo" {
+				t.Fatalf("created URL = %q", created.HTMLURL)
+			}
+			if len(requests) != 13 {
+				t.Fatalf("number of requests = %d, want 13: %v", len(requests), requests)
+			}
+		})
 	}
 }
 
