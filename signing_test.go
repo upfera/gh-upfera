@@ -98,6 +98,64 @@ func TestCheckSigningKeyRejectsUnusableSSHKey(t *testing.T) {
 	}
 }
 
+func TestCheckSigningKeyRequiresGitIdentity(t *testing.T) {
+	configureGitConfig(t)
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRejectsEmptyGitIdentity(t *testing.T) {
+	configureGitConfig(t, "user.name", "")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRequiresAuthorEmail(t *testing.T) {
+	configureGitConfig(t, "user.name", "Test User")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRequiresSigningKey(t *testing.T) {
+	configureGitConfig(t, "user.name", "Test User", "user.email", "test@example.com")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRejectsUnusableOpenPGPKey(t *testing.T) {
+	configureGitConfig(t,
+		"user.name", "Test User",
+		"user.email", "test@example.com",
+		"user.signingkey", "no-such-openpgp-key",
+	)
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestGitConfigReportsMissingGitExecutable(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	if _, err := gitConfig(context.Background(), "user.name"); err == nil {
+		t.Fatal("gitConfig() error = nil, want executable lookup error")
+	}
+}
+
+func configureGitConfig(t *testing.T, settings ...string) {
+	t.Helper()
+	directory := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(directory, "gitconfig"))
+	for index := 0; index+1 < len(settings); index += 2 {
+		command(t, directory, "git", "config", "--global", settings[index], settings[index+1])
+	}
+}
+
+func assertSigningConfigurationError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "GitHub-verified signing key") {
+		t.Fatalf("checkSigningKey() error = %v, want signing configuration error", err)
+	}
+}
+
 func TestCreateSignedRootCommitReportsGitFailure(t *testing.T) {
 	if _, err := createSignedRootCommit(context.Background(), t.TempDir(), "invalid-tree"); err == nil || !strings.Contains(err.Error(), "create the signed initial commit") {
 		t.Fatalf("createSignedRootCommit() error = %v, want Git error", err)
