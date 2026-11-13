@@ -12,6 +12,10 @@ The GitHub CLI and Git must be installed. Authenticate with `gh auth login` or s
 
 The authenticated account must be allowed to create repositories in `upfera`, read the template, update repository settings, and push repository contents. For fine-grained tokens, grant the required organization repository-creation permission and repository `Contents` and `Administration` write access.
 
+## Releases
+
+Versions are derived from [Conventional Commits](https://www.conventionalcommits.org/). Merging a `feat:` or `fix:` change to `main` opens a `chore: release X.Y.Z` pull request; merging that pull request creates the `vX.Y.Z` tag and a GitHub Release. Precompiled extension binaries are attached to each release for `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`, and `windows-amd64.exe`, so `gh extension install upfera/gh-upfera` installs a prebuilt binary on supported platforms.
+
 ## Usage
 
 ```sh
