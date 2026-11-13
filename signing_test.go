@@ -68,6 +68,22 @@ func TestCheckSigningKeyUsesConfiguredSSHKey(t *testing.T) {
 	}
 }
 
+func TestCheckSigningKeyDoesNotUsePassphrase(t *testing.T) {
+	directory := t.TempDir()
+	configuration := filepath.Join(directory, "gitconfig")
+	keyPath := filepath.Join(directory, "signing-key")
+	t.Setenv("GIT_CONFIG_GLOBAL", configuration)
+	command(t, directory, "ssh-keygen", "-q", "-t", "ed25519", "-N", "test-passphrase", "-C", "test@example.com", "-f", keyPath)
+	command(t, directory, "git", "config", "--global", "user.name", "Test User")
+	command(t, directory, "git", "config", "--global", "user.email", "test@example.com")
+	command(t, directory, "git", "config", "--global", "gpg.format", "ssh")
+	command(t, directory, "git", "config", "--global", "user.signingkey", keyPath)
+
+	if err := checkSigningKey(context.Background()); err != nil {
+		t.Fatalf("checkSigningKey() error = %v", err)
+	}
+}
+
 func TestCheckSigningKeyRejectsUnusableSSHKey(t *testing.T) {
 	directory := t.TempDir()
 	configuration := filepath.Join(directory, "gitconfig")
@@ -79,6 +95,64 @@ func TestCheckSigningKeyRejectsUnusableSSHKey(t *testing.T) {
 
 	if err := checkSigningKey(context.Background()); err == nil || !strings.Contains(err.Error(), "GitHub-verified signing key") {
 		t.Fatalf("checkSigningKey() error = %v, want unusable key error", err)
+	}
+}
+
+func TestCheckSigningKeyRequiresGitIdentity(t *testing.T) {
+	configureGitConfig(t)
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRejectsEmptyGitIdentity(t *testing.T) {
+	configureGitConfig(t, "user.name", "")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRequiresAuthorEmail(t *testing.T) {
+	configureGitConfig(t, "user.name", "Test User")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRequiresSigningKey(t *testing.T) {
+	configureGitConfig(t, "user.name", "Test User", "user.email", "test@example.com")
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestCheckSigningKeyRejectsUnusableOpenPGPKey(t *testing.T) {
+	configureGitConfig(t,
+		"user.name", "Test User",
+		"user.email", "test@example.com",
+		"user.signingkey", "no-such-openpgp-key",
+	)
+
+	assertSigningConfigurationError(t, checkSigningKey(context.Background()))
+}
+
+func TestGitConfigReportsMissingGitExecutable(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	if _, err := gitConfig(context.Background(), "user.name"); err == nil {
+		t.Fatal("gitConfig() error = nil, want executable lookup error")
+	}
+}
+
+func configureGitConfig(t *testing.T, settings ...string) {
+	t.Helper()
+	directory := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(directory, "gitconfig"))
+	for index := 0; index+1 < len(settings); index += 2 {
+		command(t, directory, "git", "config", "--global", settings[index], settings[index+1])
+	}
+}
+
+func assertSigningConfigurationError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "GitHub-verified signing key") {
+		t.Fatalf("checkSigningKey() error = %v, want signing configuration error", err)
 	}
 }
 

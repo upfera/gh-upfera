@@ -8,29 +8,64 @@ import (
 )
 
 func checkSigningKey(ctx context.Context) error {
-	directory, err := os.MkdirTemp("", "gh-upfera-signing-check-*")
-	if err != nil {
-		return fmt.Errorf("check the configured commit-signing key: %w", err)
-	}
-	defer os.RemoveAll(directory)
-
-	init, err := commandContext(ctx, "git", "init", "-q", directory)
-	if err != nil {
-		return fmt.Errorf("initialize temporary Git repository for signing check: %w", err)
-	}
-	if err := init.Run(); err != nil {
-		return fmt.Errorf("initialize temporary Git repository for signing check: %w", err)
-	}
-	mktree, err := commandContext(ctx, "git", "-C", directory, "mktree")
-	if err != nil {
-		return fmt.Errorf("create empty tree for signing check: %w", err)
-	}
-	tree, err := mktree.Output()
-	if err != nil {
-		return fmt.Errorf("create empty tree for signing check: %w", err)
-	}
-	if _, err := createSignedRootCommit(ctx, directory, strings.TrimSpace(string(tree))); err != nil {
+	if err := checkGitConfiguration(ctx, "user.name"); err != nil {
 		return fmt.Errorf("configure a GitHub-verified signing key and Git author identity before creating repositories")
+	}
+	if err := checkGitConfiguration(ctx, "user.email"); err != nil {
+		return fmt.Errorf("configure a GitHub-verified signing key and Git author identity before creating repositories")
+	}
+
+	signingKey, err := gitConfig(ctx, "user.signingkey")
+	if err != nil || signingKey == "" {
+		return fmt.Errorf("configure a GitHub-verified signing key and Git author identity before creating repositories")
+	}
+	format, _ := gitConfig(ctx, "gpg.format")
+	if format == "" {
+		format = "openpgp"
+	}
+	if format == "ssh" {
+		if !strings.HasPrefix(signingKey, "key::") {
+			if _, err := os.Stat(signingKey); err != nil {
+				return fmt.Errorf("configure a GitHub-verified signing key and Git author identity before creating repositories")
+			}
+		}
+	}
+	if format == "openpgp" {
+		gpgProgram, _ := gitConfig(ctx, "gpg.program")
+		if gpgProgram == "" {
+			gpgProgram = "gpg"
+		}
+		command, err := commandContext(ctx, gpgProgram, "--batch", "--list-secret-keys", signingKey)
+		if err != nil || command.Run() != nil {
+			return fmt.Errorf("configure a GitHub-verified signing key and Git author identity before creating repositories")
+		}
+	}
+	return nil
+}
+
+func checkGitConfiguration(ctx context.Context, key string) error {
+	value, err := gitConfig(ctx, key)
+	return errOrEmpty(value, err)
+}
+
+func gitConfig(ctx context.Context, key string) (string, error) {
+	command, err := commandContext(ctx, "git", "config", "--get", key)
+	if err != nil {
+		return "", err
+	}
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func errOrEmpty(value string, err error) error {
+	if err != nil || value == "" {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("configuration is empty")
 	}
 	return nil
 }
