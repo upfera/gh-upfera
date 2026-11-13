@@ -111,7 +111,7 @@ func (c *gitHubClient) request(ctx context.Context, method, path string, body an
 		request.Header.Set("Content-Type", "application/json")
 	}
 
-	response, err := c.http.Do(request)
+	response, err := c.requestClient().Do(request)
 	if err != nil {
 		return fmt.Errorf("contact GitHub API: %w", err)
 	}
@@ -133,6 +133,21 @@ func (c *gitHubClient) request(ctx context.Context, method, path string, body an
 	return nil
 }
 
+// requestClient returns the configured client with redirects disabled, so a
+// redirect response (for example from a renamed repository) is surfaced with
+// its status code instead of being silently followed to another resource.
+func (c *gitHubClient) requestClient() *http.Client {
+	client := *c.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &client
+}
+
+func isRedirectStatus(status int) bool {
+	return status >= http.StatusMultipleChoices && status < http.StatusBadRequest
+}
+
 func (c *gitHubClient) CreateRepository(ctx context.Context, options createOptions) (repository, error) {
 	if err := validateCreateOptions(options); err != nil {
 		return repository{}, err
@@ -145,7 +160,12 @@ func (c *gitHubClient) CreateRepository(ctx context.Context, options createOptio
 		return repository{}, fmt.Errorf("repository %s/%s already exists", upferaOwner, options.Name)
 	}
 	var apiErr *githubError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+	if !errors.As(err, &apiErr) {
+		return repository{}, fmt.Errorf("check repository availability: %w", err)
+	}
+	// A redirect means the name is only served by a renamed repository, so the
+	// requested name is free; a genuine 200 is handled above as "already exists".
+	if apiErr.StatusCode != http.StatusNotFound && !isRedirectStatus(apiErr.StatusCode) {
 		return repository{}, fmt.Errorf("check repository availability: %w", err)
 	}
 	if c.signerCheck != nil {

@@ -20,7 +20,7 @@ gh upfera repo create <name> [--description <text>] [--visibility public|private
 
 Repositories are private by default. Use `--public` or `--private` as a shortcut for `--visibility`. Names must be 1–100 ASCII letters, digits, periods, underscores, or hyphens; descriptions can be up to 350 characters.
 
-The command checks that the name is available before creating the repository. GitHub may still reject the operation if the name is taken concurrently or organization policy denies it. If a later setup step fails, the command reports that the repository was created and identifies the failed step.
+The command checks that the name is available before creating the repository. A name that GitHub only redirects to a renamed repository is treated as available. GitHub may still reject the operation if the name is taken concurrently or organization policy denies it. If a later setup step fails, the command reports that the repository was created and identifies the failed step.
 
 ## Development
 
