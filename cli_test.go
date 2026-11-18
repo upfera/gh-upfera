@@ -47,9 +47,10 @@ func TestParseCreateArgs(t *testing.T) {
 
 func TestParseCreateArgsRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want string
+		name     string
+		args     []string
+		want     string
+		unwanted string
 	}{
 		{name: "missing name", args: []string{"--public"}, want: "exactly one repository name"},
 		{name: "too many names", args: []string{"one", "two"}, want: "exactly one repository name"},
@@ -58,6 +59,8 @@ func TestParseCreateArgsRejectsInvalidInput(t *testing.T) {
 		{name: "unknown option", args: []string{"one", "--force"}, want: "unknown option"},
 		{name: "missing description", args: []string{"one", "--description"}, want: "requires a value"},
 		{name: "slashes in name", args: []string{"owner/repo"}, want: "invalid character"},
+		{name: "single dot name", args: []string{"."}, want: `"." or ".."`, unwanted: "consecutive dots"},
+		{name: "double dot name", args: []string{".."}, want: `"." or ".."`, unwanted: "consecutive dots"},
 		{name: "consecutive dots", args: []string{"bad..name"}, want: "consecutive dots"},
 		{name: "git suffix", args: []string{"repo.GIT"}, want: "cannot end with .git"},
 		{name: "control character in description", args: []string{"one", "-d", "bad\ndescription"}, want: "control characters"},
@@ -69,6 +72,9 @@ func TestParseCreateArgsRejectsInvalidInput(t *testing.T) {
 			_, err := parseCreateArgs(tt.args)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("parseCreateArgs() error = %v, want substring %q", err, tt.want)
+			}
+			if tt.unwanted != "" && strings.Contains(err.Error(), tt.unwanted) {
+				t.Fatalf("parseCreateArgs() error = %v, must not contain %q", err, tt.unwanted)
 			}
 		})
 	}
