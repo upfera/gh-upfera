@@ -97,7 +97,10 @@ func validateRepositoryName(name string) error {
 	if len(name) == 0 || len(name) > 100 {
 		return fmt.Errorf("repository name must be between 1 and 100 characters")
 	}
-	if name == "." || name == ".." || strings.Contains(name, "..") {
+	if name == "." || name == ".." {
+		return fmt.Errorf(`repository name cannot be "." or ".."`)
+	}
+	if strings.Contains(name, "..") {
 		return fmt.Errorf("repository name cannot contain consecutive dots")
 	}
 	for _, r := range name {
