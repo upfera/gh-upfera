@@ -28,6 +28,14 @@ organization's [CONTRIBUTING.md](https://github.com/upfera/.github/blob/main/CON
 - Lint: `go vet ./...`
 - Format: `gofmt -w *.go`
 
+## Repository defaults
+
+`gh upfera repo create` applies these organization defaults to every repository it creates, and
+verifies each by reading it back:
+
+- squash-merge only, with `PR_TITLE` / `PR_BODY` squash commit messages
+- issue creation restricted to collaborators (`COLLABORATORS_ONLY`)
+
 ## More context
 
 Longer agent-facing material (specs, decisions, prompts, skills) lives in [`.ai/`](.ai/).

@@ -58,6 +58,7 @@ func runWithClientFactory(ctx context.Context, args []string, stdout, stderr io.
 	fmt.Fprintf(stdout, "Created %s\n", repository.HTMLURL)
 	fmt.Fprintln(stdout, "Verified squash merge: enabled (PR_TITLE / PR_BODY)")
 	fmt.Fprintln(stdout, "Verified merge commits and rebase merging: disabled")
+	fmt.Fprintln(stdout, "Verified issue creation: collaborators only")
 	return nil
 }
 

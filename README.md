@@ -1,6 +1,6 @@
 # gh-upfera
 
-`gh-upfera` is a GitHub CLI extension for creating repositories in the `upfera` organization from [`upfera/.template`](https://github.com/upfera/.template). It applies the organization’s squash-merge defaults and creates a single, signed initial commit.
+`gh-upfera` is a GitHub CLI extension for creating repositories in the `upfera` organization from [`upfera/.template`](https://github.com/upfera/.template). It applies the organization's defaults — squash-merge only with `PR_TITLE`/`PR_BODY` squash messages and issue creation restricted to collaborators — and creates a single, signed initial commit.
 
 ## Install
 
@@ -23,6 +23,8 @@ gh upfera repo create <name> [--description <text>] [--visibility public|private
 ```
 
 Repositories are private by default. Use `--public` or `--private` as a shortcut for `--visibility`. Names must be 1–100 ASCII letters, digits, periods, underscores, or hyphens; descriptions can be up to 350 characters.
+
+The extension applies these organization defaults to every repository it creates and verifies each by reading it back: squash-merge only with `PR_TITLE`/`PR_BODY` squash commit messages, merge commits and rebase merging disabled, and issue creation restricted to collaborators (`COLLABORATORS_ONLY`). There is no flag for these; they always apply.
 
 The command checks that the name is available before creating the repository. A name that GitHub only redirects to a renamed repository is treated as available. GitHub may still reject the operation if the name is taken concurrently or organization policy denies it. If a later setup step fails, the command reports that the repository was created and identifies the failed step.
 

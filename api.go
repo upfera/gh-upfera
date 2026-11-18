@@ -15,14 +15,31 @@ import (
 )
 
 const (
-	githubReposPath          = "/repos/"
-	upferaOwner              = "upfera"
-	templateRepository       = "upfera/.template"
-	squashTitle              = "PR_TITLE"
-	squashMessage            = "PR_BODY"
-	initialCommitMessage     = "chore: initial commit"
-	generatedRepoWaitTimeout = 30 * time.Second
-	generatedRepoInitialWait = 250 * time.Millisecond
+	githubReposPath                      = "/repos/"
+	graphQLPath                          = "/graphql"
+	upferaOwner                          = "upfera"
+	templateRepository                   = "upfera/.template"
+	squashTitle                          = "PR_TITLE"
+	squashMessage                        = "PR_BODY"
+	initialCommitMessage                 = "chore: initial commit"
+	generatedRepoWaitTimeout             = 30 * time.Second
+	generatedRepoInitialWait             = 250 * time.Millisecond
+	issueCreationPolicyCollaboratorsOnly = "COLLABORATORS_ONLY"
+
+	repositoryIssueCreationQuery = `query ($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    id
+    issueCreationPolicy
+  }
+}`
+
+	updateIssueCreationPolicyMutation = `mutation ($input: UpdateRepositoryInput!) {
+  updateRepository(input: $input) {
+    repository {
+      issueCreationPolicy
+    }
+  }
+}`
 )
 
 type repository struct {
@@ -332,6 +349,74 @@ func (c *gitHubClient) configureAndVerify(ctx context.Context, name string) erro
 	}
 	if !actual.AllowSquashMerge || actual.AllowMergeCommit || actual.AllowRebaseMerge || actual.SquashMergeCommitTitle != squashTitle || actual.SquashMergeCommitMessage != squashMessage {
 		return fmt.Errorf("GitHub returned unexpected merge settings (squash=%t, merge=%t, rebase=%t, title=%q, message=%q)", actual.AllowSquashMerge, actual.AllowMergeCommit, actual.AllowRebaseMerge, actual.SquashMergeCommitTitle, actual.SquashMergeCommitMessage)
+	}
+	return c.configureIssueCreation(ctx, name)
+}
+
+type graphQLRequest struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables,omitempty"`
+}
+
+type graphQLRepository struct {
+	ID                  string `json:"id"`
+	IssueCreationPolicy string `json:"issueCreationPolicy"`
+}
+
+// graphQL posts to the GraphQL API. GraphQL reports failures as HTTP 200
+// responses with an errors array, so those are surfaced as errors too.
+func (c *gitHubClient) graphQL(ctx context.Context, query string, variables map[string]any, result any) error {
+	var response struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.request(ctx, http.MethodPost, graphQLPath, graphQLRequest{Query: query, Variables: variables}, &response); err != nil {
+		return err
+	}
+	if len(response.Errors) > 0 {
+		return errors.New(response.Errors[0].Message)
+	}
+	if result == nil {
+		return nil
+	}
+	if err := json.Unmarshal(response.Data, result); err != nil {
+		return fmt.Errorf("decode GitHub GraphQL response: %w", err)
+	}
+	return nil
+}
+
+// configureIssueCreation restricts issue creation to collaborators. REST cannot
+// set this field, so it goes through GraphQL and is verified by reading the
+// value back the way the merge settings are.
+func (c *gitHubClient) configureIssueCreation(ctx context.Context, name string) error {
+	var node struct {
+		Repository graphQLRepository `json:"repository"`
+	}
+	if err := c.graphQL(ctx, repositoryIssueCreationQuery, map[string]any{"owner": upferaOwner, "name": name}, &node); err != nil {
+		return fmt.Errorf("read repository node id: %w", err)
+	}
+	if node.Repository.ID == "" {
+		return fmt.Errorf("read repository node id: GitHub returned an empty repository node id")
+	}
+
+	variables := map[string]any{"input": map[string]any{
+		"repositoryId":        node.Repository.ID,
+		"issueCreationPolicy": issueCreationPolicyCollaboratorsOnly,
+	}}
+	if err := c.graphQL(ctx, updateIssueCreationPolicyMutation, variables, nil); err != nil {
+		return fmt.Errorf("apply collaborators-only issue creation policy: %w", err)
+	}
+
+	var readBack struct {
+		Repository graphQLRepository `json:"repository"`
+	}
+	if err := c.graphQL(ctx, repositoryIssueCreationQuery, map[string]any{"owner": upferaOwner, "name": name}, &readBack); err != nil {
+		return fmt.Errorf("read back issue creation policy: %w", err)
+	}
+	if readBack.Repository.IssueCreationPolicy != issueCreationPolicyCollaboratorsOnly {
+		return fmt.Errorf("verify collaborators-only issue creation policy: GitHub returned %q, want %q", readBack.Repository.IssueCreationPolicy, issueCreationPolicyCollaboratorsOnly)
 	}
 	return nil
 }

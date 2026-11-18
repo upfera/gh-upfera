@@ -123,7 +123,7 @@ func TestRunInvalidCommandAndClientFailure(t *testing.T) {
 }
 
 func TestRunCreatesRepositoryAndPrintsSettings(t *testing.T) {
-	server := newRunTestServer()
+	server := newRunTestServer(t)
 	defer server.Close()
 	client := &gitHubClient{baseURL: server.URL, token: "test-token", http: server.Client()}
 	var stdout, stderr strings.Builder
@@ -135,14 +135,22 @@ func TestRunCreatesRepositoryAndPrintsSettings(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Created https://github.com/upfera/sample") || !strings.Contains(stdout.String(), "Verified squash merge: enabled") {
 		t.Fatalf("success output = %q", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "Verified issue creation: collaborators only") {
+		t.Fatalf("success output does not report the issue creation policy: %q", stdout.String())
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
 
-func newRunTestServer() *httptest.Server {
+func newRunTestServer(t *testing.T) *httptest.Server {
 	settingsApplied := false
+	policyApplied := false
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == graphQLPath {
+			graphQLRepositoryHandler(t, "sample-node", &policyApplied).ServeHTTP(w, r)
+			return
+		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /repos/upfera/sample":
 			if !settingsApplied {
