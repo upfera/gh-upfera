@@ -72,11 +72,14 @@ func TestCreateRepositoryUsesTemplateAndAppliesSettings(t *testing.T) {
 	if created.HTMLURL != "https://github.com/upfera/new-repo" {
 		t.Fatalf("created URL = %q", created.HTMLURL)
 	}
-	if len(requests) != 13 {
-		t.Fatalf("number of requests = %d, want 13: %v", len(requests), requests)
+	if len(requests) != 16 {
+		t.Fatalf("number of requests = %d, want 16: %v", len(requests), requests)
 	}
 	if requests[2] != "GET /repos/upfera/new-repo/git/ref/heads/main" || requests[3] != requests[2] {
 		t.Fatalf("generated branch was not retried: %v", requests[:4])
+	}
+	if requests[13] != "POST /graphql" || requests[15] != "POST /graphql" {
+		t.Fatalf("issue creation policy was not applied and verified over GraphQL: %v", requests)
 	}
 }
 
@@ -103,6 +106,8 @@ func newRepositoryCreationHandler(t *testing.T, requests *[]string, settingsAppl
 	registerAPIRoute(t, mux, requests, "PATCH", "/repos/upfera/new-repo", repositoryUpdateHandler(t, settingsApplied))
 	registerAPIRoute(t, mux, requests, "DELETE", "/repos/upfera/new-repo/git/refs/heads/{branch}", statusHandler(http.StatusNoContent))
 	registerAPIRoute(t, mux, requests, "POST", "/repos/upfera/new-repo/git/refs", refCreationHandler(t))
+	policyApplied := false
+	registerAPIRoute(t, mux, requests, "POST", graphQLPath, graphQLRepositoryHandler(t, "new-repo-node", &policyApplied))
 	return mux
 }
 
@@ -190,6 +195,56 @@ func refCreationHandler(t *testing.T) http.Handler {
 			t.Errorf("ref points to %q", body["sha"])
 		}
 		w.WriteHeader(http.StatusCreated)
+	})
+}
+
+// graphQLRepositoryHandler answers the repository node-id query, the
+// updateRepository mutation and the read-back query used to configure issue
+// creation. It tracks the policy through policyApplied so the read-back only
+// reports the new value after the mutation.
+func graphQLRepositoryHandler(t *testing.T, nodeID string, policyApplied *bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode graphql request: %v", err)
+		}
+		if strings.Contains(body.Query, "mutation") {
+			input, ok := body.Variables["input"].(map[string]any)
+			if !ok {
+				t.Errorf("updateRepository input = %#v", body.Variables["input"])
+				return
+			}
+			if input["repositoryId"] != nodeID {
+				t.Errorf("updateRepository repositoryId = %v, want %s", input["repositoryId"], nodeID)
+			}
+			if input["issueCreationPolicy"] != issueCreationPolicyCollaboratorsOnly {
+				t.Errorf("updateRepository issueCreationPolicy = %v, want %s", input["issueCreationPolicy"], issueCreationPolicyCollaboratorsOnly)
+			}
+			*policyApplied = true
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+				"updateRepository": map[string]any{"repository": map[string]any{
+					"id":                  nodeID,
+					"issueCreationPolicy": issueCreationPolicyCollaboratorsOnly,
+				}},
+			}})
+			return
+		}
+		if !strings.Contains(body.Query, "repository(owner:") {
+			t.Errorf("unexpected graphql query: %s", body.Query)
+		}
+		if body.Variables["owner"] != upferaOwner || body.Variables["name"] == "" {
+			t.Errorf("graphql query variables = %#v", body.Variables)
+		}
+		policy := "ALL"
+		if *policyApplied {
+			policy = issueCreationPolicyCollaboratorsOnly
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			"repository": map[string]any{"id": nodeID, "issueCreationPolicy": policy},
+		}})
 	})
 }
 
@@ -363,8 +418,8 @@ func TestCreateRepositoryTreatsRenamedRepositoryRedirectAsAvailable(t *testing.T
 			if created.HTMLURL != "https://github.com/upfera/new-repo" {
 				t.Fatalf("created URL = %q", created.HTMLURL)
 			}
-			if len(requests) != 13 {
-				t.Fatalf("number of requests = %d, want 13: %v", len(requests), requests)
+			if len(requests) != 16 {
+				t.Fatalf("number of requests = %d, want 16: %v", len(requests), requests)
 			}
 		})
 	}
@@ -415,6 +470,83 @@ func TestCreateRepositoryVerifiesSettingsAndReportsMismatch(t *testing.T) {
 	err := client.configureAndVerify(context.Background(), "settings-repo")
 	if err == nil || !strings.Contains(err.Error(), "unexpected merge settings") {
 		t.Fatalf("configureAndVerify() error = %v, want settings mismatch", err)
+	}
+}
+
+func TestCreateRepositoryVerifiesIssueCreationPolicyMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "PATCH /repos/upfera/policy-repo", "POST /graphql":
+			if r.Method == http.MethodPost {
+				// Always report ALL, even after the mutation, so the read-back
+				// verification fails.
+				writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+					"repository": map[string]any{"id": "policy-node", "issueCreationPolicy": "ALL"},
+				}})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		case "GET /repos/upfera/policy-repo":
+			writeJSON(w, http.StatusOK, repository{
+				AllowSquashMerge:         true,
+				SquashMergeCommitTitle:   squashTitle,
+				SquashMergeCommitMessage: squashMessage,
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &gitHubClient{baseURL: server.URL, token: "test-token", http: server.Client()}
+	err := client.configureAndVerify(context.Background(), "policy-repo")
+	if err == nil || !strings.Contains(err.Error(), "verify collaborators-only issue creation policy") {
+		t.Fatalf("configureAndVerify() error = %v, want issue creation policy mismatch", err)
+	}
+}
+
+func TestCreateRepositoryReportsIssueCreationPolicyAPIFailure(t *testing.T) {
+	mutationAttempted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "PATCH /repos/upfera/policy-repo":
+			w.WriteHeader(http.StatusOK)
+		case "GET /repos/upfera/policy-repo":
+			writeJSON(w, http.StatusOK, repository{
+				AllowSquashMerge:         true,
+				SquashMergeCommitTitle:   squashTitle,
+				SquashMergeCommitMessage: squashMessage,
+			})
+		case "POST /graphql":
+			var body struct {
+				Query string `json:"query"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode graphql request: %v", err)
+			}
+			if strings.Contains(body.Query, "mutation") {
+				mutationAttempted = true
+				writeJSON(w, http.StatusOK, map[string]any{"errors": []map[string]any{
+					{"message": "Resource not accessible by personal access token"},
+				}})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+				"repository": map[string]any{"id": "policy-node", "issueCreationPolicy": "ALL"},
+			}})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &gitHubClient{baseURL: server.URL, token: "test-token", http: server.Client()}
+	err := client.configureAndVerify(context.Background(), "policy-repo")
+	if !mutationAttempted {
+		t.Fatal("issue creation policy mutation was not attempted")
+	}
+	if err == nil || !strings.Contains(err.Error(), "apply collaborators-only issue creation policy") || !strings.Contains(err.Error(), "Resource not accessible") {
+		t.Fatalf("configureAndVerify() error = %v, want named issue creation policy failure", err)
 	}
 }
 
